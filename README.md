@@ -18,3 +18,10 @@ Ver `docs/CONCEPT.md` (flujo + endpoints + errores).
 ## Test rápido
 GET /mcp devuelve 405 (Method Not Allowed).
 Las tools se consumen vía POST (JSON-RPC) desde Laburen.
+
+## Setup (D1)
+wrangler d1 execute laburen_shop --remote --file=sql/0001_schema.sql
+python scripts/xlsx_to_sql.py data/products.xlsx sql/seed_products.sql
+wrangler d1 execute laburen_shop --remote --file=sql/seed_products.sql
+
+
