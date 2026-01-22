@@ -1,5 +1,7 @@
 # Laburen MCP Shop (Challenge)
 
+La demo se prueba en vivo desde Chatwoot (Website widget). El script Python solo sirve para regenerar el seed desde el XLSX (opcional).
+
 ## MCP Endpoint
 https://laburen-mcp-shop.lucasferreyra6991.workers.dev/mcp
 
@@ -23,5 +25,8 @@ Las tools se consumen vía POST (JSON-RPC) desde Laburen.
 wrangler d1 execute laburen_shop --remote --file=sql/0001_schema.sql
 python scripts/xlsx_to_sql.py data/products.xlsx sql/seed_products.sql
 wrangler d1 execute laburen_shop --remote --file=sql/seed_products.sql
+
+
+
 
 
