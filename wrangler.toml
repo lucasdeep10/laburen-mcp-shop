@@ -1,0 +1,8 @@
+name = "laburen-mcp-shop"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "laburen_shop"
+database_id = "c7e778d6-5fd1-4a14-82b5-1bedab6a05cc"
