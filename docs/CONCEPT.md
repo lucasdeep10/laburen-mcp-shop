@@ -2,122 +2,143 @@
 
 ## Objetivo
 Construir un agente de IA que pueda:
-1) Explorar productos (buscar/listar)
-2) Mostrar detalles de productos
-3) Crear un carrito por conversación y agregar items
-4) (Extra) Editar carrito (cambiar cantidades / eliminar)
-5) Derivar a humano en Chatwoot dejando contexto y etiquetas
+- Explorar productos (buscar/listar)
+- Mostrar detalles de productos
+- Crear un carrito por conversación y agregar ítems
+- (Extra) Editar carrito (cambiar cantidades / eliminar)
+- Derivar a humano en Chatwoot dejando contexto y etiquetas
 
 ## Arquitectura (alto nivel)
-Usuario (WhatsApp) → Chatwoot → Laburen Agent → MCP Server (Cloudflare Worker) → D1 (productos + carritos)
-y opcionalmente → Chatwoot API (labels / nota privada / handoff)
+Usuario → Chatwoot (widget/WhatsApp) → Agente Laburen → MCP (Cloudflare Worker) → D1 (productos + carritos)  
+Opcional: MCP → Chatwoot API (labels / private note / handoff)
 
 ## Supuestos de diseño
-- **Un carrito por conversación**: `carts.conversation_id` único.
-- El agente **valida stock**, pero **no descuenta stock** (no hay checkout real en el challenge).
-- Identidad: `conversation_id` proviene de Chatwoot (ID de conversación).
+- Un carrito por conversación: `carts.conversation_id` es único.
+- Se valida stock (`qty <= stock`) pero **no** se descuenta stock (no hay checkout real).
+- `conversation_id` proviene del ID real de Chatwoot.
 
----
-
-## Diagrama de flujo (interacción)
-
+## Mapa de flujo (interacción)
 ```mermaid
 flowchart TD
-  A[Usuario pregunta por productos] --> B{Intención}
-  B -->|Explorar / buscar| C[MCP: list_products(q, inStockOnly, limit)]
-  C --> D[Agente muestra opciones + pregunta preferencia]
-  D --> E{Usuario elige producto}
-  E -->|Pide detalle| F[MCP: get_product(id)]
-  F --> D
+  A[Usuario busca productos] --> B[Tool: list_products]
+  B --> C[Agente muestra opciones (IDs)]
+  C --> D{Usuario elige}
+  D -->|Detalle| E[Tool: get_product]
+  E --> C
 
-  E -->|Quiere comprar / agregar| G[MCP: create_cart(conversation_id) si no existe]
-  G --> H[MCP: update_cart(conversation_id, items[{product_id, qty}])]
-  H --> I[Agente resume carrito: items + total]
-  I --> J{Usuario pide editar?}
-  J -->|Sí| K[MCP: update_cart (cambia qty / qty=0 elimina)]
-  K --> I
-  J -->|No| L{Usuario quiere humano / cerrar}
-  L -->|Sí| M[MCP: chatwoot_handoff(conversation_id, reason, summary)]
-  L -->|No| D
+  D -->|Comprar| F[Tool: create_cart]
+  F --> G[Tool: update_cart]
+  G --> H[Tool: get_cart]
+  H --> I{Editar carrito?}
+  I -->|Sí| G
+  I -->|No| J{Pide humano / cerrar}
+  J -->|Sí| K[Tool: chatwoot_handoff]
+  J -->|No| C
 Endpoints / Tools (MCP)
-MCP HTTP Endpoint (Cloudflare Worker)
-URL base: https://<tu-worker>.workers.dev/mcp
+MCP HTTP Endpoint
+URL: https://<tu-worker>.workers.dev/mcp
 
 Método: POST (JSON-RPC)
 
-Header recomendado: MCP-Protocol-Version: 2025-06-18
+Header: MCP-Protocol-Version: 2025-06-18
 
-Tools del MCP
-1) list_products
-Uso: explorar catálogo y buscar por texto
-Input: { q?: string, inStockOnly?: boolean, limit?: number }
-Output: { products: [{id,name,description,price,stock}], count }
-Regla de agente: si el usuario “busca”, “ver opciones”, “qué tenés”, llamar a esta tool.
+Tools
+list_products
 
-2) get_product
-Uso: detalle del producto elegido
-Input: { id: number }
-Output: { product: {id,name,description,price,stock} | null }
+Input: { q?, inStockOnly?, limit? }
 
-3) create_cart
-Uso: asegurar carrito por conversación
-Input: { conversation_id: string, items?: [{product_id:number, qty:number}] }
+Output: { products[], count }
+
+get_product
+
+Input: { id }
+
+Output: { product|null }
+
+create_cart
+
+Input: { conversation_id, items? }
+
 Output: { cart, items, total }
 
-4) update_cart (Extra: edición)
-Uso: agregar / actualizar / eliminar items
-Input: { conversation_id: string, items: [{product_id:number, qty:number}] }
-Reglas:
+update_cart (Extra: edición)
 
-qty > 0 agrega o actualiza
+Input: { conversation_id, items:[{product_id, qty}] }
 
-qty = 0 elimina el item
+Reglas: qty>0 upsert, qty=0 elimina, valida stock.
 
-valida qty <= stock, si no: error “Stock insuficiente…”
+get_cart
 
-5) get_cart
-Uso: ver estado del carrito
-Input: { conversation_id: string }
-Output: { cart|null, items: [...], total }
+Input: { conversation_id }
 
-6) chatwoot_add_labels
-Uso: etiquetar conversación según productos / estado
-Input: { conversation_id: string, labels: string[] }
-Regla: mergea labels (no pisa).
+Output: { cart|null, items[], total }
 
-7) chatwoot_handoff
-Uso: derivación a humano con contexto
-Input: { conversation_id: string, reason: string, summary: string }
-Acciones: agrega labels + nota privada (resumen del carrito y motivo).
-Regla de agente: si el usuario pide “hablar con humano”, “asesor”, “finalizar compra”, usar esta tool.
+chatwoot_add_labels
 
-Manejo de errores (comportamiento esperado)
-Si list_products no encuentra resultados → pedir reformulación (“marca”, “rango de precio”, “categoría”).
+Input: { conversation_id, labels[] }
 
-Si update_cart falla por stock → el agente ofrece el máximo disponible o alternativas.
+Acción: mergea labels (no pisa)
 
-Si faltan datos (producto o qty) → el agente pregunta antes de llamar tools.
+chatwoot_handoff
 
-Criterios de éxito (demo)
-Usuario: “Quiero ver productos” → lista opciones (MCP)
+Input: { conversation_id, reason, summary }
 
-Usuario: “Mostrame el 3” → detalle (MCP)
+Acción: agrega labels + private note con resumen
 
-Usuario: “Agregá 2” → carrito + total (MCP)
+Manejo de errores (esperado)
+Sin resultados en list_products: pedir reformulación (tipo/talla/color/categoría).
 
-Usuario: “Cambiá a 1” → edita (MCP)
+Stock insuficiente en update_cart: informar stock disponible y sugerir ajustar qty.
 
-Usuario: “Quiero hablar con un humano” → handoff + resumen en Chatwoot (MCP → Chatwoot)
+Si faltan datos (ID o qty): preguntar antes de llamar tools.
 
+Demo mínima (criterio de éxito)
+“Quiero ver productos” → list_products
+
+“Ver detalle ID X” → get_product
+
+“Agregar ID X cantidad Y” → create_cart + update_cart + get_cart
+
+“Modificar ID X cantidad Y” / “Quitar ID X” → update_cart
+
+“Finalizar compra” → chatwoot_handoff
+
+yaml
+Copiar código
+
+Con esto, GitHub te renderiza el diagrama sin errores.
+
+---
+
+## 2) README con bloques de código (mejor presentación)
+Tu README está bien, pero te conviene que el “Setup (D1)” esté en bloque para que se vea prolijo.
+
+> Reemplazá solo la sección `## Setup (D1)` por esta:
+
+```md
+## Setup (D1)
+
+```bash
+wrangler d1 execute laburen_shop --remote --file=sql/0001_schema.sql
+python scripts/xlsx_to_sql.py data/products.xlsx sql/seed_products.sql
+wrangler d1 execute laburen_shop --remote --file=sql/seed_products.sql
 yaml
 Copiar código
 
 ---
 
-### Próximo paso (técnico, para que la demo funcione)
-1) **Cargar products.xlsx en D1** (tabla `products`)  
-2) En Laburen, configurar el agente para que use las tools MCP y pase `conversation_id` correcto  
-3) Probar E2E en Chatwoot: listar → detalle → carrito → editar → handoff
+## 3) Limpieza final (importantísimo)
+En tu `CONCEPT.md` eliminá cualquier línea tipo:
+- `Unable to render rich display`
+- links a docs de GitHub
+- `::contentReference[...]`
 
-Si querés, en el próximo mensaje te armo el **“script de carga de products.xlsx”** (2 opciones: desde UI de D1 o conversión a SQL) y un **prompt de instrucciones** para Laburen para que el agente se comporte “vendedor” y use tools de forma consistente.
-::contentReference[oaicite:0]{index=0}
+Eso **no debe** estar en el entregable.
+
+---
+
+## 4) Commit final recomendado
+```bash
+git add docs/CONCEPT.md README.md
+git commit -m "Fix conceptual doc and improve README formatting"
+git push
